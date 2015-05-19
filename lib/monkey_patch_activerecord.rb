@@ -14,101 +14,108 @@ module ActiveRecord
   # Patches for Persistence to allow certain partitioning (that related to the primary key) to work.
   #
   module Persistence
-    # Deletes the record in the database and freezes this instance to reflect
-    # that no changes should be made (since they can't be persisted).
-    def destroy
-      destroy_associations
-      
-      if persisted?
-        IdentityMap.remove(self) if IdentityMap.enabled?
-        pk         = self.class.primary_key
-        column     = self.class.columns_hash[pk]
-        substitute = connection.substitute_at(column, 0)
-        
-        if self.class.respond_to?(:dynamic_arel_table)
-          using_arel_table = dynamic_arel_table()
-          relation = ActiveRecord::Relation.new(self.class, using_arel_table).
-            where(using_arel_table[pk].eq(substitute))
-        else
-          using_arel_table = self.class.arel_table
-          relation = self.class.unscoped.where(using_arel_table[pk].eq(substitute))
-        end
-        
-        relation.bind_values = [[column, id]]
-        relation.delete_all
+    # This method is patched to provide a relation referencing the partition instead
+    # of the parent table.
+    def relation_for_destroy
+      pk         = self.class.primary_key
+      column     = self.class.columns_hash[pk]
+      substitute = self.class.connection.substitute_at(column, 0)
+
+      # ****** BEGIN PARTITIONED PATCH ******
+      if self.class.respond_to?(:dynamic_arel_table)
+        using_arel_table = dynamic_arel_table()
+        relation = ActiveRecord::Relation.new(self.class, using_arel_table).
+          where(using_arel_table[pk].eq(substitute))
+      else
+        # ****** END PARTITIONED PATCH ******
+        relation = self.class.unscoped.where(
+                                             self.class.arel_table[pk].eq(substitute))
+        # ****** BEGIN PARTITIONED PATCH ******
       end
-      
-      @destroyed = true
-      freeze
+      # ****** END PARTITIONED PATCH ******
+
+      relation.bind_values = [[column, id]]
+      relation
     end
 
-    # Updates the associated record with values matching those of the instance attributes.
-    # Returns the number of affected rows.
-    def update(attribute_names = @attributes.keys)
-      attributes_with_values = arel_attributes_values(false, false, attribute_names)
-      return 0 if attributes_with_values.empty?
-      klass = self.class
-      using_arel_table = self.respond_to?(:dynamic_arel_table) ? dynamic_arel_table() : klass.arel_table
-      stmt = klass.unscoped.where(using_arel_table[klass.primary_key].eq(id)).arel.compile_update(attributes_with_values)
-      klass.connection.update stmt
-    end
-
-    #
-    # patch the create method to prefetch the primary key if needed
-    #
-    def create
+    # This method is patched to prefetch the primary key (if necessary) and to ensure
+    # that the partitioning attributes are always included (AR will exclude them
+    # if the db column's default value is the same as the new record's value).
+    def create_record(attribute_names = @attributes.keys)
+      # ****** BEGIN PARTITIONED PATCH ******
       if self.id.nil? && self.class.respond_to?(:prefetch_primary_key?) && self.class.prefetch_primary_key?
-        self.id = connection.next_sequence_value(self.class.sequence_name)
+        self.id = self.class.connection.next_sequence_value(self.class.sequence_name)
+        attribute_names |= ["id"]
       end
 
-      attributes_values = arel_attributes_values(!id.nil?)
+      if self.class.respond_to?(:partition_keys)
+        attribute_names |= self.class.partition_keys.map(&:to_s)
+      end
+      # ****** END PARTITIONED PATCH ******
+
+      attributes_values = arel_attributes_with_values_for_create(attribute_names)
 
       new_id = self.class.unscoped.insert attributes_values
+      self.id ||= new_id if self.class.primary_key
 
-      self.id ||= new_id
-
-      IdentityMap.add(self) if IdentityMap.enabled?
       @new_record = false
       id
     end
-  end
- 
-  #
-  # A patch to QueryMethods to change default behavior of select
-  # to use the Relation's Arel::Table.
-  #
-  module QueryMethods
+   
+  end # module Persistence
 
+  module QueryMethods
+    
+    # This method is patched to change the default behavior of select
+    # to use the Relation's Arel::Table
     def build_select(arel, selects)
-      unless selects.empty?
-        @implicit_readonly = false
-        arel.project(*selects)
+      if !selects.empty?
+        expanded_select = selects.map do |field|
+          columns_hash.key?(field.to_s) ? arel_table[field] : field
+        end
+        arel.project(*expanded_select)
       else
+        # ****** BEGIN PARTITIONED PATCH ******
+        # Original line:
+        # arel.project(@klass.arel_table[Arel.star])
         arel.project(table[Arel.star])
+        # ****** END PARTITIONED PATCH ******
       end
+    end 
+
+  end # module QueryMethods
+
+  class Relation
+    
+    # This method is patched to use the arel table corresponding to the partition,
+    # instead of the parent table.
+    def update_record(values, id, id_was) # :nodoc:
+      substitutes, binds = substitute_values values
+
+      # ****** BEGIN PARTITIONED PATCH ******
+      # Original line:
+      # um = @klass.unscoped.where(@klass.arel_table[@klass.primary_key].eq(id_was || id)).arel.compile_update(substitutes, @klass.primary_key)
+
+      using_arel_table = self.respond_to?(:dynamic_arel_table) ? dynamic_arel_table() : @klass.arel_table
+      um = @klass.unscoped.where(using_arel_table[@klass.primary_key].eq(id_was || id)).arel.compile_update(substitutes, @klass.primary_key)
+
+      # ****** END PARTITIONED PATCH ******
+
+      @klass.connection.update(
+                               um,
+                               'SQL',
+                               binds)
     end
 
-  end
-
-  #
-  # Patches for relation to allow back hooks into the {ActiveRecord}
-  # requesting name of table as a function of attributes.
-  #
-  class Relation
-    #
-    # Patches {ActiveRecord}'s building of an insert statement to request
-    # of the model a table name with respect to attribute values being
-    # inserted.
-    #
-    # The differences between this and the original code are small and marked
-    # with PARTITIONED comment.
+    # This method is patched to use a table name that is derived from
+    # the attribute values.
     def insert(values)
       primary_key_value = nil
 
       if primary_key && Hash === values
         primary_key_value = values[values.keys.find { |k|
-          k.name == primary_key
-        }]
+                                     k.name == primary_key
+                                   }]
 
         if !primary_key_value && connection.prefetch_primary_key?(klass.table_name)
           primary_key_value = connection.next_sequence_value(klass.sequence_name)
@@ -117,15 +124,14 @@ module ActiveRecord
       end
 
       im = arel.create_insert
-      #
-      # PARTITIONED ADDITION. get arel_table from class with respect to the
-      # current values to placed in the table (which hopefully hold the values
-      # that are used to determine the child table this insert should be
-      # redirected to)
-      #
+
+      # ****** BEGIN PARTITIONED PATCH ******
       actual_arel_table = @klass.dynamic_arel_table(Hash[*values.map{|k,v| [k.name,v]}.flatten]) if @klass.respond_to?(:dynamic_arel_table)
       actual_arel_table = @table unless actual_arel_table
+      # Original line:
+      # im.into @table
       im.into actual_arel_table
+      # ****** END PARTITIONED PATCH ******
 
       conn = @klass.connection
 
@@ -145,12 +151,14 @@ module ActiveRecord
       end
 
       conn.insert(
-        im,
-        'SQL',
-        primary_key,
-        primary_key_value,
-        nil,
-        binds)
+                  im,
+                  'SQL',
+                  primary_key,
+                  primary_key_value,
+                  nil,
+                  binds)
     end
-  end
-end
+
+  end # class Relation
+
+end # module ActiveRecord

@@ -3,19 +3,6 @@ require "#{File.dirname(__FILE__)}/support/tables_spec_helper"
 
 module ActiveRecord::ConnectionAdapters
 
-  describe "TableDefinition" do
-
-    describe "check_constraint" do
-
-      it "returns an array of constraints" do
-        TableDefinition.new(nil).check_constraint("( id >= 0 and id < 10 )").
-            first.to_sql.should == "CHECK (( id >= 0 and id < 10 ))"
-      end # returns an array of constraints
-
-    end # check_constraint
-
-  end # TableDefinition
-
   describe "PostgreSQLAdapter" do
 
     let(:check_existence_schema) do

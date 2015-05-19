@@ -57,13 +57,14 @@ module Partitioned
       # Does a specific child partition exist.
       #
       def partition_exists?(*partition_key_values)
-        return find(:first,
-                    :from => "pg_tables",
-                    :select => "count(*) as count",
-                    :conditions  => ["schemaname = ? and tablename = ?",
-                                      configurator.schema_name,
-                                      configurator.part_name(*partition_key_values)
-                    ]).count.to_i == 1
+        query = <<-SQL
+          SELECT COUNT(*) AS count
+          FROM pg_tables
+          WHERE schemaname = '#{configurator.schema_name}'
+            AND tablename = '#{configurator.part_name(*partition_key_values)}'
+          LIMIT 1
+        SQL
+        return find_by_sql(query).first.count.to_i == 1
       end
 
       #
@@ -90,12 +91,15 @@ module Partitioned
       #  $3 = the parameter 'how_many'
       #
       def last_n_partition_names(how_many = 1)
-        return find(:all,
-                    :from => "pg_tables",
-                    :select => :tablename,
-                    :conditions  => ["schemaname = ?", configurator.schema_name],
-                    :order => last_n_partitions_order_by_clause,
-                    :limit => how_many).map(&:tablename)
+        order_by_clause = last_n_partitions_order_by_clause
+        query = <<-SQL
+          SELECT tablename
+          FROM pg_tables
+          WHERE schemaname = '#{configurator.schema_name}'
+          #{order_by_clause.nil? ? "" : "ORDER BY " + order_by_clause}
+          LIMIT 1
+        SQL
+        return find_by_sql(query).map(&:tablename)
       end
 
       #
@@ -162,8 +166,20 @@ module Partitioned
                        :id => false,
                        :options => "INHERITS (#{configurator.parent_table_name(*partition_key_values)})"
                      }) do |t|
-          constraint = configurator.check_constraint(*partition_key_values)
-          t.check_constraint constraint if constraint
+        end
+        add_check_constraint(*partition_key_values)
+      end
+
+      #
+      # Add the check constraint to the table (if applicable)
+      #
+      def add_check_constraint(*partition_key_values)
+        constraint = configurator.check_constraint(*partition_key_values)
+        if constraint
+          sql = <<-SQL
+            ALTER TABLE #{configurator.table_name(*partition_key_values)} ADD CHECK (#{constraint});
+          SQL
+          execute(sql)
         end
       end
 

@@ -11,7 +11,6 @@ module Partitioned
     module MonthlyTimeField
       class Employee < Partitioned::ByMonthlyTimeField
         belongs_to :company, :class_name => 'Company'
-        attr_accessible :company_id, :name, :created_at
 
         def self.partition_time_field
           return :created_at

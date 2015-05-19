@@ -150,7 +150,7 @@ module Partitioned
     #
     # Use as:
     #
-    #   Foo.from_partition(KEY).find(:first)
+    #   Foo.from_partition(KEY).first
     #
     # where KEY is the key value(s) used as the check constraint on Foo's table.
     #
@@ -168,7 +168,7 @@ module Partitioned
     #
     # Use as:
     #
-    #   Foo.from_partition_without_alias(KEY).find(:all, :select => "*")
+    #   Foo.from_partition_without_alias(KEY).all
     #
     # where KEY is the key value(s) used as the check constraint on Foo's table.
     #

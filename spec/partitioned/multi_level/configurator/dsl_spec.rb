@@ -35,7 +35,9 @@ describe Partitioned::MultiLevel::Configurator::Dsl do
         "parent_table_name" => nil,
         "check_constraint" => nil,
         "encoded_name" => nil,
-        "using_classes" => []
+        "using_classes" => [],
+        "after_partition_table_create_hooks" => [],
+
       }
     end
 

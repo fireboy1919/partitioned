@@ -11,7 +11,6 @@ module Partitioned
     module IntegerField
       class Employee < Partitioned::ByIntegerField
         belongs_to :company, :class_name => 'Company'
-        attr_accessible :name, :integer_field, :company_id
 
         def self.partition_integer_field
           return :integer_field
@@ -125,7 +124,7 @@ module Partitioned
       context "checks data in the check_constraint, when partition_table_size != 1" do
 
         before do
-          @employee.stub!(:partition_table_size).and_return(2)
+          @employee.stub(:partition_table_size).and_return(2)
         end
 
         it "returns check_constraint" do

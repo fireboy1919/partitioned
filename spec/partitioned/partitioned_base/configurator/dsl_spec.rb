@@ -37,7 +37,8 @@ module Partitioned
               "parent_table_schema_name" => nil,
               "parent_table_name" => nil,
               "check_constraint" => nil,
-              "encoded_name" => nil
+              "encoded_name" => nil,
+              "after_partition_table_create_hooks" => [],
             }
           end
 

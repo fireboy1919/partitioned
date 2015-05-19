@@ -11,7 +11,6 @@ module Partitioned
     module DailyTimeField
       class Employee < ByDailyTimeField
         belongs_to :company, :class_name => 'Company'
-        attr_accessible :name, :company_id, :created_at
 
         def self.partition_time_field
           return :created_at
@@ -28,7 +27,7 @@ module Partitioned
       @employee = DailyTimeField::Employee
       create_tables
       dates = @employee.partition_generate_range(DATE_NOW,
-                                                 DATE_NOW + 1.days)
+                                                 DATE_NOW + 1.days).map { |date| [date] }
       @employee.create_new_partition_tables(dates)
       ActiveRecord::Base.connection.execute <<-SQL
         insert into employees_partitions.
@@ -55,8 +54,8 @@ module Partitioned
 
       it "returns the beginning of the day" do
         class_by_daily_time_field.
-            partition_normalize_key_value(Date.parse('2011-01-05')).
-            should == Date.parse('2011-01-03')
+            partition_normalize_key_value(Time.parse('2011-01-05 11:01:21')).
+            should == Time.parse('2011-01-05')
       end
 
     end # #partition_normalize_key_value
@@ -86,7 +85,7 @@ module Partitioned
       context "checks data in the base_name" do
 
         it "returns base_name" do
-          data.base_name.call(@employee, Date.parse('2011-01-05')).should == "20110103"
+          data.base_name.call(@employee, Time.parse('2011-01-05')).should == "20110105"
         end
 
       end # checks data in the base_name
